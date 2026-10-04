@@ -199,16 +199,21 @@ type EditFormData = z.infer<typeof editSchema>;
 
 function CreateUserModal({
   organizationId,
+  callerRole,
   onClose,
   onCreated,
 }: {
   organizationId: string;
+  callerRole: UserRole;
   onClose: () => void;
   onCreated: (u: UserResponse) => void;
 }) {
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [showPass, setShowPass] = useState(false);
+
+  // ADMINs cannot assign the OWNER role
+  const assignableRoles = callerRole === "OWNER" ? ALL_ROLES : ALL_ROLES.filter((r) => r !== "OWNER");
 
   const {
     register,
@@ -315,7 +320,7 @@ function CreateUserModal({
                   style={{ paddingLeft: "2.25rem", appearance: "none" }}
                   {...register("role")}
                 >
-                  {ALL_ROLES.map((r) => (
+                                  {assignableRoles.map((r) => (
                     <option key={r} value={r}>
                       {ROLE_CONFIG[r].label} — {ROLE_CONFIG[r].description}
                     </option>
@@ -403,11 +408,13 @@ function CreateUserModal({
 
 function EditUserModal({
   user,
+  callerRole,
   isSelf,
   onClose,
   onSaved,
 }: {
   user: UserResponse;
+  callerRole: UserRole;
   isSelf: boolean;
   onClose: () => void;
   onSaved: (u: UserResponse) => void;
@@ -416,6 +423,9 @@ function EditUserModal({
   const [apiError, setApiError] = useState<string | null>(null);
   const [showPass, setShowPass] = useState(false);
   const [changePassword, setChangePassword] = useState(false);
+
+  // ADMINs cannot assign the OWNER role
+  const assignableRoles = callerRole === "OWNER" ? ALL_ROLES : ALL_ROLES.filter((r) => r !== "OWNER");
 
   const {
     register,
@@ -522,7 +532,7 @@ function EditUserModal({
                     disabled={isSelf}
                     {...register("role")}
                   >
-                    {ALL_ROLES.map((r) => (
+                    {assignableRoles.map((r) => (
                       <option key={r} value={r}>
                         {ROLE_CONFIG[r].label}
                       </option>
@@ -714,7 +724,16 @@ export default function UsersPage() {
 
   useEffect(() => {
     if (!authLoading && !currentUser) router.push("/login");
+    // WAREHOUSE_STAFF cannot access user management
+    if (!authLoading && currentUser && currentUser.role === "WAREHOUSE_STAFF") {
+      router.push("/dashboard");
+    }
   }, [currentUser, authLoading, router]);
+
+  // ── Permission flags ──────────────────────────────
+  const isOwner = currentUser?.role === "OWNER";
+  const isAdmin = currentUser?.role === "ADMIN";
+  const canManageUsers = isOwner || isAdmin; // STAFF cannot access this page at all
 
   const fetchUsers = useCallback(async () => {
     if (!organizationId) return;
@@ -788,14 +807,16 @@ export default function UsersPage() {
             <h1>Team Members</h1>
             <p>Manage who has access to your VaultFlow workspace</p>
           </div>
-          <button
-            id="invite-member-btn"
-            className="btn btn-primary"
-            style={{ width: "auto", padding: "0.625rem 1.25rem", margin: 0 }}
-            onClick={() => setShowCreate(true)}
-          >
-            <Plus size={16} /> Invite Member
-          </button>
+          {(isOwner || isAdmin) && (
+            <button
+              id="invite-member-btn"
+              className="btn btn-primary"
+              style={{ width: "auto", padding: "0.625rem 1.25rem", margin: 0 }}
+              onClick={() => setShowCreate(true)}
+            >
+              <Plus size={16} /> Invite Member
+            </button>
+          )}
         </div>
 
         {/* Stats */}
@@ -991,24 +1012,30 @@ export default function UsersPage() {
                         {/* Actions */}
                         <td>
                           <div className="row-actions">
-                            <button
-                              className="icon-btn"
-                              onClick={() => setEditTarget(u)}
-                              title="Edit member"
-                              id={`edit-user-${u.id}`}
-                            >
-                              <Pencil size={14} />
-                            </button>
-                            <button
-                              className="icon-btn icon-btn-danger"
-                              onClick={() => setDeleteTarget(u)}
-                              title={isSelf ? "Cannot delete yourself" : "Remove member"}
-                              disabled={isSelf}
-                              style={{ opacity: isSelf ? 0.3 : 1, cursor: isSelf ? "not-allowed" : "pointer" }}
-                              id={`delete-user-${u.id}`}
-                            >
-                              <Trash2 size={14} />
-                            </button>
+                            {/* Edit — ADMIN can edit, but not OWNER accounts */}
+                            {canManageUsers && !(isAdmin && u.role === "OWNER") && (
+                              <button
+                                className="icon-btn"
+                                onClick={() => setEditTarget(u)}
+                                title="Edit member"
+                                id={`edit-user-${u.id}`}
+                              >
+                                <Pencil size={14} />
+                              </button>
+                            )}
+                            {/* Delete — OWNER only, cannot delete self */}
+                            {isOwner && (
+                              <button
+                                className="icon-btn icon-btn-danger"
+                                onClick={() => setDeleteTarget(u)}
+                                title={isSelf ? "Cannot delete yourself" : "Remove member"}
+                                disabled={isSelf}
+                                style={{ opacity: isSelf ? 0.3 : 1, cursor: isSelf ? "not-allowed" : "pointer" }}
+                                id={`delete-user-${u.id}`}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1046,17 +1073,19 @@ export default function UsersPage() {
       </div>
 
       {/* Modals */}
-      {showCreate && organizationId && (
+      {showCreate && organizationId && currentUser && (
         <CreateUserModal
           organizationId={organizationId}
+          callerRole={currentUser.role}
           onClose={() => setShowCreate(false)}
           onCreated={handleCreated}
         />
       )}
 
-      {editTarget && (
+      {editTarget && currentUser && (
         <EditUserModal
           user={editTarget}
+          callerRole={currentUser.role}
           isSelf={editTarget.id === currentUser.id}
           onClose={() => setEditTarget(null)}
           onSaved={handleSaved}
